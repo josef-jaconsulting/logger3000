@@ -1,0 +1,7 @@
+behave>=1.2.6
+requests>=2.28.0
+sphinx>=7.0.0,<8.0.0
+sphinx-gherkindoc>=3.0.0
+setuptools<70.0.0
+
+sphinx-rtd-theme
