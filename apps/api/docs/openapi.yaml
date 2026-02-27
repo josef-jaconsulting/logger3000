@@ -23,11 +23,26 @@ servers:
 
 tags:
   - name: Car Management
-    description: Operations related to vehicle registration, tracking, and details.
+    description: > 
+      #### Operations related to vehicle registration, tracking, and details.
+      
+      This includes specifically:
+        * Adding a new Car to the fleet
+        * Taking a car out of the fleet by soft deleting it (Setting the delet time)
+        * Updating specific car details
+        * Adding comments to the car like:
+          * Inspection scheduled on Thursday
+          * Winter tires need to be changed next season
   - name: Trip Management
-    description: Operations for logging and reviewing vehicle trips.
+    description: > 
+      #### Operations for logging and reviewing vehicle trips.
+
+      Here you can add a trip to a specific car. You get the history of trips for a car. You can also update trips with a specific status. 
   - name: Location Management
-    description: Operations for managing favourite and frequent locations.
+    description: > 
+      #### Operations for managing favourite and frequent locations.
+
+      Store reusable locations for trips. They can be set as favourites for a user.
 
 # --- Security Schemes ---
 security:
@@ -193,8 +208,8 @@ components:
       description: "Fields available for updating a car's details. All fields are optional."
       properties:
         name: { type: string, examples: ["CEO's Luxury Sedan"] }
-        maker: { type: string, examples: ["Polestar"] }
-        model: { type: string, examples: ["4"] }
+        maker: { type: string, examples: ["Polestar", "Mazda"] }
+        model: { type: string, examples: ["4", "CX30"] }
         usageType: { type: string, enum: [private, company, mixed] }
         currentOdometer: { type: integer, examples: [16000], description: "Manual odometer correction." }
         dateRemoved: { type: string, format: date-time, description: "Set to null to restore a soft-deleted car, or provide a timestamp to mark as removed." }
