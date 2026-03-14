@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Car Tracking API
   description: >
-    A robust API for car fleet management, trip logging, and location tracking. 
+    A robust API for car fleet management, trip logging, and location tracking.
     Designed for high interoperability between human-operated frontends and AI agents.
 
     **Key Features:**
@@ -10,7 +10,9 @@ info:
     * Soft-delete support for vehicles.
     * Dual-layer security (OAuth2 & API Tokens).
     * Multipart support for vehicle imagery.
-  version: 1.2.0
+    * HATEOAS-style `_links` on all resources for discoverability.
+    * Cursor-based pagination for efficient traversal of large collections.
+  version: 2.0.0
   contact:
     name: API Architecture Team
     email: dev@cartracker.io
@@ -23,26 +25,31 @@ servers:
 
 tags:
   - name: Car Management
-    description: > 
+    description: >
       #### Operations related to vehicle registration, tracking, and details.
-      
+
       This includes specifically:
         * Adding a new Car to the fleet
-        * Taking a car out of the fleet by soft deleting it (Setting the delet time)
+        * Taking a car out of the fleet by soft deleting it (Setting the deletion time)
         * Updating specific car details
         * Adding comments to the car like:
           * Inspection scheduled on Thursday
           * Winter tires need to be changed next season
   - name: Trip Management
-    description: > 
+    description: >
       #### Operations for logging and reviewing vehicle trips.
 
-      Here you can add a trip to a specific car. You get the history of trips for a car. You can also update trips with a specific status. 
+      Here you can add a trip to a specific car. You get the history of trips for a car. You can also update trips with a specific status.
   - name: Location Management
-    description: > 
+    description: >
       #### Operations for managing favourite and frequent locations.
 
       Store reusable locations for trips. They can be set as favourites for a user.
+  - name: Comment Management
+    description: >
+      #### Operations for managing car comments.
+
+      Add notes and observations to vehicles for tracking maintenance, inspections, and other remarks.
 
 # --- Security Schemes ---
 security:
@@ -66,79 +73,278 @@ components:
       name: X-API-TOKEN
       description: Static token for AI agents or CI/CD integrations.
 
+  parameters:
+    Vin:
+      name: vin
+      in: path
+      required: true
+      schema: { type: string }
+      description: "Vehicle Identification Number."
+    TripId:
+      name: tripId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+      description: "Unique trip identifier."
+    LocationId:
+      name: locationId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+      description: "Unique location identifier."
+    CommentId:
+      name: commentId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+      description: "Unique comment identifier."
+    Cursor:
+      name: cursor
+      in: query
+      schema: { type: string }
+      description: "Opaque pagination cursor from a previous response's `_links.next` or `_links.prev`."
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, default: 10, minimum: 1, maximum: 100 }
+      description: "Maximum number of items to return per page."
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: { type: string, format: uuid }
+      description: "Client-generated idempotency key for safe retries of state-mutating requests."
+
   headers:
     X-Clacks-Overhead:
       description: "A man is not dead while his name is still spoken."
       schema:
         type: string
-        examples: ["GNU Terry Pratchett"]
+        const: "GNU Terry Pratchett"
+    X-Request-ID:
+      description: "Unique request identifier for audit trail correlation."
+      schema:
+        type: string
+        format: uuid
+    X-RateLimit-Limit:
+      description: "Maximum number of requests allowed in the current time window."
+      schema:
+        type: integer
+        minimum: 0
+    X-RateLimit-Remaining:
+      description: "Number of requests remaining in the current time window."
+      schema:
+        type: integer
+        minimum: 0
+    X-RateLimit-Reset:
+      description: "Unix timestamp (seconds) when the current rate limit window resets."
+      schema:
+        type: integer
+        minimum: 0
+
+  responses:
+    BadRequest:
+      description: Invalid request data.
+      headers:
+        X-Clacks-Overhead: { $ref: "#/components/headers/X-Clacks-Overhead" }
+      content:
+        {
+          application/problem+json:
+            { schema: { $ref: "#/components/schemas/Problem" } },
+        }
+    Unauthorized:
+      description: Authentication required.
+      headers:
+        X-Clacks-Overhead: { $ref: "#/components/headers/X-Clacks-Overhead" }
+      content:
+        {
+          application/problem+json:
+            { schema: { $ref: "#/components/schemas/Problem" } },
+        }
+    Forbidden:
+      description: Insufficient permissions for this action.
+      headers:
+        X-Clacks-Overhead: { $ref: "#/components/headers/X-Clacks-Overhead" }
+      content:
+        {
+          application/problem+json:
+            { schema: { $ref: "#/components/schemas/Problem" } },
+        }
+    NotFound:
+      description: Resource not found.
+      headers:
+        X-Clacks-Overhead: { $ref: "#/components/headers/X-Clacks-Overhead" }
+      content:
+        {
+          application/problem+json:
+            { schema: { $ref: "#/components/schemas/Problem" } },
+        }
+    Conflict:
+      description: Resource conflict.
+      headers:
+        X-Clacks-Overhead: { $ref: "#/components/headers/X-Clacks-Overhead" }
+      content:
+        {
+          application/problem+json:
+            { schema: { $ref: "#/components/schemas/Problem" } },
+        }
+    TooManyRequests:
+      description: Rate limit exceeded. Retry after the window resets.
+      headers:
+        X-Clacks-Overhead: { $ref: "#/components/headers/X-Clacks-Overhead" }
+        X-RateLimit-Limit: { $ref: "#/components/headers/X-RateLimit-Limit" }
+        X-RateLimit-Remaining:
+          { $ref: "#/components/headers/X-RateLimit-Remaining" }
+        X-RateLimit-Reset: { $ref: "#/components/headers/X-RateLimit-Reset" }
+      content:
+        {
+          application/problem+json:
+            { schema: { $ref: "#/components/schemas/Problem" } },
+        }
+    InternalServerError:
+      description: An unexpected error occurred on the server.
+      headers:
+        X-Clacks-Overhead: { $ref: "#/components/headers/X-Clacks-Overhead" }
+        X-Request-ID: { $ref: "#/components/headers/X-Request-ID" }
+      content:
+        {
+          application/problem+json:
+            { schema: { $ref: "#/components/schemas/Problem" } },
+        }
 
   schemas:
+    # --- HATEOAS Link Object ---
+    Link:
+      type: object
+      description: "A hypermedia link following the HAL convention."
+      required: [href]
+      properties:
+        href:
+          type: string
+          format: uri-reference
+          description: "URI reference to the linked resource."
+          examples: ["/cars/WBA1234567890"]
+
+    # --- URI Reference (used in place of a full embedded object) ---
+    ResourceRef:
+      type: object
+      description: "A URI reference to a resource, used in place of a full embedded object."
+      required: [href]
+      properties:
+        href:
+          type: string
+          format: uri-reference
+          examples: ["/locations/550e8400-e29b-41d4-a716-446655440000"]
+
     # --- Standardized Error Object ---
     Problem:
       type: object
-      description: "Standardized error format based on RFC 7807."
+      description: "Standardized error format based on RFC 9457."
       required: [type, title, status]
       properties:
         type:
           type: string
           format: uri
+          maxLength: 2048
           description: "A URI reference that identifies the problem type."
           examples: ["https://api.cartracker.io/errors/not-found"]
-        title: 
+        title:
           type: string
+          maxLength: 150
           description: "A short, human-readable summary of the problem."
           examples: ["Resource Not Found"]
-        status: 
+        status:
           type: integer
           description: "The HTTP status code generated by the origin server."
           examples: [404]
+          minimum: 100
+          maximum: 599
         detail:
           type: string
+          maxLength: 2000
           description: "A human-readable explanation specific to this occurrence of the problem."
           examples: ["The requested car (VIN: WBA1234567890) was not found."]
-        instance: 
+        instance:
           type: string
           format: uri
+          maxLength: 2048
           description: "A URI reference that identifies the specific occurrence of the problem."
           examples: ["/cars/WBA1234567890"]
 
-    # --- Pagination Metadata ---
+    # --- Cursor-based Pagination Metadata ---
     Pagination:
       type: object
-      required: [total, page, pageSize, totalPages]
+      description: "Cursor-based pagination metadata included in all collection responses."
+      required: [limit, hasMore]
       properties:
-        total: { type: integer, examples: [42], description: "Total number of items available." }
-        page: { type: integer, examples: [1], description: "Current page number." }
-        pageSize: { type: integer, examples: [10], description: "Number of items per page." }
-        totalPages: { type: integer, examples: [5], description: "Total number of pages." }
+        limit:
+          {
+            type: integer,
+            examples: [10],
+            description: "Number of items requested per page.",
+          }
+        hasMore:
+          {
+            type: boolean,
+            examples: [true],
+            description: "Whether more items exist beyond this page.",
+          }
+
+    # --- Domain Values ---
+    Odometer:
+      type: integer
+      minimum: 0
+      maximum: 999999
+      description: "Vehicle odometer reading in Kilometers (km)."
+      examples: [15400]
 
     # --- Reusable Models ---
     Location:
       type: object
-      required: [locationId, name]
+      description: "A saved, reusable location for trip logging."
+      required: [locationId, name, _links]
       properties:
-        locationId: { type: string, format: uuid, examples: ["550e8400-e29b-41d4-a716-446655440000"] }
-        name: { type: string, examples: ["Headquarters"] }
+        locationId:
+          {
+            type: string,
+            format: uuid,
+            maxLength: 36,
+            examples: ["550e8400-e29b-41d4-a716-446655440000"],
+          }
+        name: { type: string, maxLength: 100, examples: ["Headquarters"] }
         isFavourite: { type: boolean, default: false }
         gps:
           type: object
           properties:
-            latitude: { type: number, minimum: -90, maximum: 90, examples: [48.2082] }
-            longitude: { type: number, minimum: -180, maximum: 180, examples: [16.3738] }
+            latitude:
+              { type: number, minimum: -90, maximum: 90, examples: [48.2082] }
+            longitude:
+              { type: number, minimum: -180, maximum: 180, examples: [16.3738] }
         address:
           type: object
           properties:
             street: { type: string, examples: ["Rotenturmstraße 1"] }
             city: { type: string, examples: ["Vienna"] }
             postalCode: { type: string, examples: ["1010"] }
-            country: { type: string, description: "ISO 3166-1 alpha-2", examples: ["AT"] }
+            country:
+              {
+                type: string,
+                description: "ISO 3166-1 alpha-2",
+                examples: ["AT"],
+              }
+        _links:
+          type: object
+          additionalProperties: false
+          required: [self]
+          properties:
+            self: { $ref: "#/components/schemas/Link" }
 
     LocationCreate:
       type: object
+      description: "Payload for creating a new saved location."
       required: [name]
       properties:
-        name: { type: string, examples: ["Client Office A"] }
+        name: { type: string, maxLength: 100, examples: ["Client Office A"] }
         isFavourite: { type: boolean, default: false }
         gps:
           type: object
@@ -153,82 +359,291 @@ components:
             postalCode: { type: string, examples: ["1010"] }
             country: { type: string, examples: ["AT"] }
 
+    LocationUpdate:
+      type: object
+      description: "Fields available for updating a location. All fields are optional."
+      properties:
+        name:
+          { type: string, maxLength: 100, examples: ["Updated Office Name"] }
+        isFavourite: { type: boolean }
+        gps:
+          type: object
+          properties:
+            latitude: { type: number, minimum: -90, maximum: 90 }
+            longitude: { type: number, minimum: -180, maximum: 180 }
+        address:
+          type: object
+          properties:
+            street: { type: string }
+            city: { type: string }
+            postalCode: { type: string }
+            country: { type: string, description: "ISO 3166-1 alpha-2" }
+
     Picture:
       type: object
+      description: "A vehicle image with metadata."
+      required: [pictureId]
       properties:
-        title: { type: string, examples: ["Front-left view"] }
-        dateAdded: { type: string, format: date-time, examples: ["2026-02-26T14:00:00Z"] }
-        url: { type: string, format: uri, examples: ["https://cdn.cartracker.io/img/car_01.jpg"] }
+        pictureId:
+          {
+            type: string,
+            format: uuid,
+            maxLength: 36,
+            examples: ["c3d4e5f6-a7b8-49c0-d1e2-f3a4b5c6d7e8"],
+          }
+        title: { type: string, maxLength: 200, examples: ["Front-left view"] }
+        dateAdded:
+          {
+            type: string,
+            format: date-time,
+            maxLength: 30,
+            examples: ["2026-03-13T10:00:00Z"],
+          }
+        url:
+          {
+            type: string,
+            format: uri,
+            maxLength: 2048,
+            examples: ["https://cdn.cartracker.io/img/car_01.jpg"],
+          }
+        _links:
+          type: object
+          additionalProperties: false
+          required: [self]
+          properties:
+            self: { $ref: "#/components/schemas/Link" }
 
     Comment:
       type: object
+      description: "A note or observation attached to a vehicle."
+      required: [commentId, _links]
       properties:
-        dateCreated: { type: string, format: date-time, examples: ["2026-02-26T14:00:00Z"] }
-        text: { type: string, examples: ["Annual service completed."] }
-        dateChanged: { type: string, format: date-time, examples: ["2026-02-26T15:00:00Z"] }
+        commentId:
+          {
+            type: string,
+            format: uuid,
+            maxLength: 36,
+            examples: ["d4e5f6a7-b8c9-40d1-e2f3-a4b5c6d7e8f9"],
+          }
+        dateCreated:
+          {
+            type: string,
+            format: date-time,
+            maxLength: 30,
+            examples: ["2026-03-13T10:00:00Z"],
+          }
+        text:
+          {
+            type: string,
+            maxLength: 2000,
+            examples: ["Annual service completed."],
+          }
+        dateChanged:
+          {
+            type: string,
+            format: date-time,
+            maxLength: 30,
+            examples: ["2026-03-13T15:00:00Z"],
+          }
         editHistory:
           type: array
           items:
             type: object
             properties:
               editor: { type: string, examples: ["service-bot-01"] }
-              timestamp: { type: string, format: date-time, examples: ["2026-02-26T15:00:00Z"] }
+              timestamp:
+                {
+                  type: string,
+                  format: date-time,
+                  examples: ["2026-03-13T15:00:00Z"],
+                }
+        _links:
+          type: object
+          additionalProperties: false
+          required: [self]
+          properties:
+            self: { $ref: "#/components/schemas/Link" }
+
+    CommentCreate:
+      type: object
+      description: "Payload for creating a new comment."
+      required: [text]
+      properties:
+        text:
+          {
+            type: string,
+            maxLength: 2000,
+            examples: ["Winter tires need to be changed next season."],
+          }
+
+    CommentUpdate:
+      type: object
+      description: "Payload for updating an existing comment."
+      properties:
+        text:
+          {
+            type: string,
+            maxLength: 2000,
+            examples: ["Winter tires changed. Spring tires mounted."],
+          }
 
     Car:
       type: object
-      required: [vin, maker, model, usageType, currentOdometer]
+      description: "A registered vehicle in the fleet."
+      required: [vin, maker, model, usageType, currentOdometer, _links]
       properties:
-        vin: { type: string, examples: ["WBA1234567890"] }
-        name: { type: string, examples: ["Company Sedan"] }
-        maker: { type: string, examples: ["Polestar"] }
-        model: { type: string, examples: ["3"] }
+        vin: { type: string, maxLength: 17, examples: ["WBA1234567890"] }
+        name: { type: string, maxLength: 100, examples: ["Company Sedan"] }
+        maker: { type: string, maxLength: 50, examples: ["Polestar"] }
+        model: { type: string, maxLength: 50, examples: ["3"] }
         usageType:
           type: string
+          maxLength: 10
           enum: [private, company, mixed]
-          description: "Classification of vehicle use. 'private' for personal, 'company' for business trips. 'mixed' indicates a car will be used both for private and company trips"
-        currentOdometer: { type: integer, description: "Unit: Kilometers (km)", examples: [15400] }
-        dateAdded: { type: string, format: date-time, examples: ["2026-01-15T10:00:00Z"] }
-        dateRemoved: { type: string, format: date-time }
-        pictureList: { type: array, items: { $ref: "#/components/schemas/Picture" } }
-        commentList: { type: array, items: { $ref: "#/components/schemas/Comment" } }
+          description: "Classification of vehicle use. 'private' for personal, 'company' for business trips. 'mixed' indicates a car will be used both for private and company trips."
+        currentOdometer: { $ref: "#/components/schemas/Odometer" }
+        dateAdded:
+          {
+            type: string,
+            format: date-time,
+            maxLength: 30,
+            examples: ["2026-01-15T10:00:00Z"],
+          }
+        dateRemoved:
+          { type: ["string", "null"], format: date-time, maxLength: 30 }
+        pictureList:
+          type: array
+          items:
+            oneOf:
+              - $ref: "#/components/schemas/Picture"
+              - $ref: "#/components/schemas/ResourceRef"
+        commentList:
+          type: array
+          items:
+            oneOf:
+              - $ref: "#/components/schemas/Comment"
+              - $ref: "#/components/schemas/ResourceRef"
+        _links:
+          type: object
+          additionalProperties: false
+          required: [self]
+          properties:
+            self: { $ref: "#/components/schemas/Link" }
+            trips: { $ref: "#/components/schemas/Link" }
+            comments: { $ref: "#/components/schemas/Link" }
 
     CarCreate:
       type: object
+      description: "Payload for registering a new vehicle."
       required: [vin, maker, model, usageType, currentOdometer]
       properties:
-        vin: { type: string, examples: ["WBA1234567890"], description: "Unique Vehicle Identification Number." }
-        name: { type: string, examples: ["Project Manager's Car"] }
-        maker: { type: string, examples: ["Polestar"] }
-        model: { type: string, examples: ["3"] }
-        usageType: { type: string, enum: [private, company, mixed] }
-        currentOdometer: { type: integer, examples: [0], description: "Starting odometer reading in km." }
+        vin:
+          {
+            type: string,
+            maxLength: 17,
+            examples: ["WBA1234567890"],
+            description: "Unique Vehicle Identification Number.",
+          }
+        name:
+          { type: string, maxLength: 100, examples: ["Project Manager's Car"] }
+        maker: { type: string, maxLength: 50, examples: ["Polestar"] }
+        model: { type: string, maxLength: 50, examples: ["3"] }
+        usageType:
+          {
+            type: string,
+            maxLength: 10,
+            enum: [private, company, mixed],
+            description: "Classification of vehicle use.",
+          }
+        currentOdometer: { $ref: "#/components/schemas/Odometer" }
 
     CarUpdate:
       type: object
       description: "Fields available for updating a car's details. All fields are optional."
       properties:
-        name: { type: string, examples: ["CEO's Luxury Sedan"] }
-        maker: { type: string, examples: ["Polestar", "Mazda"] }
-        model: { type: string, examples: ["4", "CX30"] }
-        usageType: { type: string, enum: [private, company, mixed] }
-        currentOdometer: { type: integer, examples: [16000], description: "Manual odometer correction." }
-        dateRemoved: { type: string, format: date-time, description: "Set to null to restore a soft-deleted car, or provide a timestamp to mark as removed." }
+        name: { type: string, maxLength: 100, examples: ["CEO's Luxury Sedan"] }
+        maker: { type: string, maxLength: 50, examples: ["Polestar", "Mazda"] }
+        model: { type: string, maxLength: 50, examples: ["4", "CX30"] }
+        usageType:
+          {
+            type: string,
+            maxLength: 10,
+            enum: [private, company, mixed],
+            description: "Classification of vehicle use.",
+          }
+        currentOdometer: { $ref: "#/components/schemas/Odometer" }
+        dateRemoved:
+          {
+            type: ["string", "null"],
+            format: date-time,
+            maxLength: 30,
+            description: "Set to null to restore a soft-deleted car, or provide a timestamp to mark as removed.",
+          }
 
     Trip:
       type: object
-      required: [tripId, startDate, endDate, startOdometer, endOdometer, startLocation, endLocation, usageType, status]
+      description: "A recorded vehicle trip with lifecycle status tracking."
+      required:
+        [
+          tripId,
+          startDate,
+          endDate,
+          startOdometer,
+          endOdometer,
+          startLocation,
+          endLocation,
+          usageType,
+          status,
+          _links,
+        ]
       properties:
-        tripId: { type: string, format: uuid, examples: ["a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"] }
-        startDate: { type: string, format: date-time, examples: ["2026-02-26T08:00:00Z"] }
-        endDate: { type: string, format: date-time, examples: ["2026-02-26T09:30:00Z"] }
-        startOdometer: { type: integer, examples: [15300] }
-        endOdometer: { type: integer, examples: [15400] }
-        startLocation: { $ref: "#/components/schemas/Location" }
-        endLocation: { $ref: "#/components/schemas/Location" }
-        comment: { type: string, examples: ["Client meeting in downtown."] }
-        usageType: { type: string, enum: [private, company] }
+        tripId:
+          {
+            type: string,
+            format: uuid,
+            maxLength: 36,
+            examples: ["a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"],
+          }
+        startDate:
+          {
+            type: string,
+            format: date-time,
+            maxLength: 30,
+            examples: ["2026-03-13T08:00:00Z"],
+          }
+        endDate:
+          {
+            type: string,
+            format: date-time,
+            maxLength: 30,
+            examples: ["2026-03-13T09:30:00Z"],
+          }
+        startOdometer: { $ref: "#/components/schemas/Odometer" }
+        endOdometer: { $ref: "#/components/schemas/Odometer" }
+        startLocation:
+          oneOf:
+            - $ref: "#/components/schemas/Location"
+            - $ref: "#/components/schemas/ResourceRef"
+        endLocation:
+          oneOf:
+            - $ref: "#/components/schemas/Location"
+            - $ref: "#/components/schemas/ResourceRef"
+        comment:
+          {
+            type: string,
+            maxLength: 2000,
+            examples: ["Client meeting in downtown."],
+          }
+        usageType:
+          {
+            type: string,
+            maxLength: 10,
+            enum: [private, company],
+            description: "Whether this trip was for private or company use.",
+          }
         status:
           type: string
+          maxLength: 10
           enum: [draft, started, ended, reviewed, final]
           description: |
             Trip lifecycle status:
@@ -237,19 +652,91 @@ components:
             * `ended`: Trip finished, waiting for review.
             * `reviewed`: Verified by operator or AI.
             * `final`: Locked, used for tax/billing.
+        _links:
+          type: object
+          additionalProperties: false
+          required: [self]
+          properties:
+            self: { $ref: "#/components/schemas/Link" }
+            car: { $ref: "#/components/schemas/Link" }
 
     TripCreate:
       type: object
-      required: [startDate, endDate, startOdometer, endOdometer, startLocation, endLocation, usageType]
+      description: "Payload for logging a new trip."
+      required:
+        [
+          startDate,
+          endDate,
+          startOdometer,
+          endOdometer,
+          startLocation,
+          endLocation,
+          usageType,
+        ]
       properties:
-        startDate: { type: string, format: date-time, examples: ["2026-02-26T08:00:00Z"] }
-        endDate: { type: string, format: date-time, examples: ["2026-02-26T09:30:00Z"] }
-        startOdometer: { type: integer, examples: [15300] }
-        endOdometer: { type: integer, examples: [15400] }
-        startLocation: { $ref: "#/components/schemas/Location" }
-        endLocation: { $ref: "#/components/schemas/Location" }
-        comment: { type: string, examples: ["Business trip to branch office."] }
-        usageType: { type: string, enum: [private, company] }
+        startDate:
+          {
+            type: string,
+            format: date-time,
+            maxLength: 30,
+            examples: ["2026-03-13T08:00:00Z"],
+          }
+        endDate:
+          {
+            type: string,
+            format: date-time,
+            maxLength: 30,
+            examples: ["2026-03-13T09:30:00Z"],
+          }
+        startOdometer: { $ref: "#/components/schemas/Odometer" }
+        endOdometer: { $ref: "#/components/schemas/Odometer" }
+        startLocation:
+          description: "Reference an existing location by URI, or provide inline location data."
+          oneOf:
+            - $ref: "#/components/schemas/ResourceRef"
+            - $ref: "#/components/schemas/LocationCreate"
+        endLocation:
+          description: "Reference an existing location by URI, or provide inline location data."
+          oneOf:
+            - $ref: "#/components/schemas/ResourceRef"
+            - $ref: "#/components/schemas/LocationCreate"
+        comment:
+          {
+            type: string,
+            maxLength: 2000,
+            examples: ["Business trip to branch office."],
+          }
+        usageType:
+          {
+            type: string,
+            maxLength: 10,
+            enum: [private, company],
+            description: "Whether this trip was for private or company use.",
+          }
+
+    TripUpdate:
+      type: object
+      description: "Fields available for updating a trip. All fields are optional."
+      properties:
+        status:
+          type: string
+          maxLength: 10
+          enum: [draft, started, ended, reviewed, final]
+          description: "Advance or correct the trip lifecycle status."
+        comment:
+          {
+            type: string,
+            maxLength: 2000,
+            examples: ["Updated: took a detour via highway."],
+          }
+        endDate:
+          {
+            type: string,
+            format: date-time,
+            maxLength: 30,
+            description: "Correct the trip end time.",
+          }
+        endOdometer: { $ref: "#/components/schemas/Odometer" }
 
 paths:
   # --- Car Collection ---
@@ -260,7 +747,7 @@ paths:
       summary: Get overview of owned cars
       description: |
         Returns a paginated list of cars. Soft-deleted cars (where `dateRemoved` is set) are excluded by default.
-        **AI Instruction:** When searching for a specific car not found in the first page, iterate through all pages using the `pagination.totalPages` metadata.
+        **AI Instruction:** When searching for a specific car not found in the current page, follow `_links.next` to iterate through subsequent pages while `pagination.hasMore` is true.
       parameters:
         - name: sortBy
           in: query
@@ -269,25 +756,34 @@ paths:
             enum: [creation_time, last_used, most_used]
             default: creation_time
           description: "Criteria to sort the cars by."
-        - name: page
-          in: query
-          schema: { type: integer, default: 1, minimum: 1 }
-          description: "The page number to retrieve."
-        - name: pageSize
-          in: query
-          schema: { type: integer, default: 10, minimum: 1, maximum: 100 }
-          description: "Number of items per page."
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
       responses:
         "200":
           description: Paginated car list.
           headers:
-            X-Clacks-Overhead: { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Clacks-Overhead:
+              { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Request-ID: { $ref: "#/components/headers/X-Request-ID" }
+            X-RateLimit-Limit:
+              { $ref: "#/components/headers/X-RateLimit-Limit" }
+            X-RateLimit-Remaining:
+              { $ref: "#/components/headers/X-RateLimit-Remaining" }
+            X-RateLimit-Reset:
+              { $ref: "#/components/headers/X-RateLimit-Reset" }
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   pagination: { $ref: "#/components/schemas/Pagination" }
+                  _links:
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      self: { $ref: "#/components/schemas/Link" }
+                      next: { $ref: "#/components/schemas/Link" }
+                      prev: { $ref: "#/components/schemas/Link" }
                   items:
                     type: array
                     items:
@@ -295,9 +791,16 @@ paths:
                         - $ref: "#/components/schemas/Car"
                         - type: object
                           properties:
-                            lastTripDate: { type: string, format: date-time, examples: ["2026-02-25T16:45:00Z"] }
+                            lastTripDate:
+                              {
+                                type: string,
+                                format: date-time,
+                                examples: ["2026-03-12T16:45:00Z"],
+                              }
               example:
-                pagination: { total: 1, page: 1, pageSize: 10, totalPages: 1 }
+                pagination: { limit: 10, hasMore: false }
+                _links:
+                  self: { href: "/cars?limit=10" }
                 items:
                   - vin: "WBA1234567890"
                     name: "Company Sedan"
@@ -306,23 +809,29 @@ paths:
                     usageType: "company"
                     currentOdometer: 15400
                     dateAdded: "2026-01-15T10:00:00Z"
-                    lastTripDate: "2026-02-25T16:45:00Z"
-        "400":
-          description: Invalid query parameters.
-          content: { application/json: { schema: { $ref: "#/components/schemas/Problem" } } }
-        "401":
-          description: Unauthorized.
-          content: { application/json: { schema: { $ref: "#/components/schemas/Problem" } } }
+                    lastTripDate: "2026-03-12T16:45:00Z"
+                    _links:
+                      self: { href: "/cars/WBA1234567890" }
+                      trips: { href: "/cars/WBA1234567890/trips" }
+                      comments: { href: "/cars/WBA1234567890/comments" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
 
     post:
       tags: [Car Management]
       operationId: addNewCar
       summary: Add a new car
       description: |
-        Register a new vehicle in the system. 
+        Register a new vehicle in the system.
         Supports `multipart/form-data` for including binary images or `application/json` for metadata-only creation.
         **AI Instruction:** Use this ONLY for initial registration. To update an existing car's details, use `updateCarDetails` (PATCH) instead.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
+        required: true
         content:
           application/json:
             schema: { $ref: "#/components/schemas/CarCreate" }
@@ -334,7 +843,7 @@ paths:
                 vin: { type: string }
                 maker: { type: string }
                 model: { type: string }
-                usageType: { type: string, enum: [private, company] }
+                usageType: { type: string, enum: [private, company, mixed] }
                 currentOdometer: { type: integer }
                 name: { type: string }
                 images:
@@ -344,7 +853,15 @@ paths:
         "201":
           description: Car created.
           headers:
-            X-Clacks-Overhead: { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Clacks-Overhead:
+              { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Request-ID: { $ref: "#/components/headers/X-Request-ID" }
+            X-RateLimit-Limit:
+              { $ref: "#/components/headers/X-RateLimit-Limit" }
+            X-RateLimit-Remaining:
+              { $ref: "#/components/headers/X-RateLimit-Remaining" }
+            X-RateLimit-Reset:
+              { $ref: "#/components/headers/X-RateLimit-Reset" }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Car" }
@@ -354,13 +871,17 @@ paths:
                 model: "3"
                 usageType: "company"
                 currentOdometer: 0
-                dateAdded: "2026-02-26T14:30:00Z"
-        "400":
-          description: Validation error (e.g., duplicate VIN).
-          content: { application/json: { schema: { $ref: "#/components/schemas/Problem" } } }
-        "409":
-          description: Conflict (VIN already exists).
-          content: { application/json: { schema: { $ref: "#/components/schemas/Problem" } } }
+                dateAdded: "2026-03-13T14:30:00Z"
+                _links:
+                  self: { href: "/cars/WBA1234567890" }
+                  trips: { href: "/cars/WBA1234567890/trips" }
+                  comments: { href: "/cars/WBA1234567890/comments" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
 
   /cars/{vin}:
     get:
@@ -371,16 +892,20 @@ paths:
         Returns full details for a specific car, including its most recent trips.
         **AI Instruction:** Always call this before `logTrip` to obtain the car's current odometer reading for continuity.
       parameters:
-        - name: vin
-          in: path
-          required: true
-          schema: { type: string }
-          description: "Vehicle Identification Number."
+        - $ref: "#/components/parameters/Vin"
       responses:
         "200":
           description: Comprehensive car data.
           headers:
-            X-Clacks-Overhead: { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Clacks-Overhead:
+              { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Request-ID: { $ref: "#/components/headers/X-Request-ID" }
+            X-RateLimit-Limit:
+              { $ref: "#/components/headers/X-RateLimit-Limit" }
+            X-RateLimit-Remaining:
+              { $ref: "#/components/headers/X-RateLimit-Remaining" }
+            X-RateLimit-Reset:
+              { $ref: "#/components/headers/X-RateLimit-Reset" }
           content:
             application/json:
               schema:
@@ -390,7 +915,10 @@ paths:
                     properties:
                       lastTrips:
                         type: array
-                        items: { $ref: "#/components/schemas/Trip" }
+                        items:
+                          oneOf:
+                            - $ref: "#/components/schemas/Trip"
+                            - $ref: "#/components/schemas/ResourceRef"
               example:
                 vin: "WBA1234567890"
                 name: "Company Sedan"
@@ -398,19 +926,38 @@ paths:
                 model: "3"
                 usageType: "company"
                 currentOdometer: 15400
+                _links:
+                  self: { href: "/cars/WBA1234567890" }
+                  trips: { href: "/cars/WBA1234567890/trips" }
+                  comments: { href: "/cars/WBA1234567890/comments" }
                 lastTrips:
                   - tripId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
-                    startDate: "2026-02-25T08:00:00Z"
-                    endDate: "2026-02-25T09:00:00Z"
+                    startDate: "2026-03-12T08:00:00Z"
+                    endDate: "2026-03-12T09:00:00Z"
                     startOdometer: 15350
                     endOdometer: 15400
                     status: "final"
                     usageType: "company"
-                    startLocation: { name: "Home" }
-                    endLocation: { name: "Office" }
-        "404":
-          description: Car not found.
-          content: { application/json: { schema: { $ref: "#/components/schemas/Problem" } } }
+                    startLocation:
+                      {
+                        href: "/locations/550e8400-e29b-41d4-a716-446655440000",
+                      }
+                    endLocation:
+                      {
+                        href: "/locations/661f9511-f30c-52e5-b827-557766551111",
+                      }
+                    _links:
+                      self:
+                        {
+                          href: "/cars/WBA1234567890/trips/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+                        }
+                      car: { href: "/cars/WBA1234567890" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
 
     patch:
       tags: [Car Management]
@@ -420,11 +967,7 @@ paths:
         Partially update a car's information. This allows for manual corrections or updating vehicle state.
         **AI Instruction:** Use this to restore a soft-deleted car by setting `dateRemoved` to `null`.
       parameters:
-        - name: vin
-          in: path
-          required: true
-          schema: { type: string }
-          description: "Vehicle Identification Number."
+        - $ref: "#/components/parameters/Vin"
       requestBody:
         required: true
         content:
@@ -434,7 +977,15 @@ paths:
         "200":
           description: Car updated successfully. Returns the full updated car object.
           headers:
-            X-Clacks-Overhead: { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Clacks-Overhead:
+              { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Request-ID: { $ref: "#/components/headers/X-Request-ID" }
+            X-RateLimit-Limit:
+              { $ref: "#/components/headers/X-RateLimit-Limit" }
+            X-RateLimit-Remaining:
+              { $ref: "#/components/headers/X-RateLimit-Remaining" }
+            X-RateLimit-Reset:
+              { $ref: "#/components/headers/X-RateLimit-Reset" }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Car" }
@@ -446,12 +997,16 @@ paths:
                 usageType: "company"
                 currentOdometer: 16000
                 dateAdded: "2026-01-15T10:00:00Z"
-        "400":
-          description: Invalid update data.
-          content: { application/json: { schema: { $ref: "#/components/schemas/Problem" } } }
-        "404":
-          description: Car not found.
-          content: { application/json: { schema: { $ref: "#/components/schemas/Problem" } } }
+                _links:
+                  self: { href: "/cars/WBA1234567890" }
+                  trips: { href: "/cars/WBA1234567890/trips" }
+                  comments: { href: "/cars/WBA1234567890/comments" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
 
   # --- Trip Management ---
   /cars/{vin}/trips:
@@ -463,11 +1018,7 @@ paths:
         Returns a paginated history of trips taken by the specified car.
         **AI Instruction:** Use this to verify historical trip patterns before generating new reports.
       parameters:
-        - name: vin
-          in: path
-          required: true
-          schema: { type: string }
-          description: "Vehicle Identification Number."
+        - $ref: "#/components/parameters/Vin"
         - name: sortBy
           in: query
           schema:
@@ -475,46 +1026,73 @@ paths:
             enum: [startDate_asc, startDate_desc, distance_asc, distance_desc]
             default: startDate_desc
           description: "Criteria to sort the trips by."
-        - name: page
-          in: query
-          schema: { type: integer, default: 1, minimum: 1 }
-          description: "The page number to retrieve."
-        - name: pageSize
-          in: query
-          schema: { type: integer, default: 10, minimum: 1, maximum: 100 }
-          description: "Number of items per page."
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
       responses:
         "200":
           description: Paginated trip list.
           headers:
-            X-Clacks-Overhead: { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Clacks-Overhead:
+              { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Request-ID: { $ref: "#/components/headers/X-Request-ID" }
+            X-RateLimit-Limit:
+              { $ref: "#/components/headers/X-RateLimit-Limit" }
+            X-RateLimit-Remaining:
+              { $ref: "#/components/headers/X-RateLimit-Remaining" }
+            X-RateLimit-Reset:
+              { $ref: "#/components/headers/X-RateLimit-Reset" }
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   pagination: { $ref: "#/components/schemas/Pagination" }
+                  _links:
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      self: { $ref: "#/components/schemas/Link" }
+                      next: { $ref: "#/components/schemas/Link" }
+                      prev: { $ref: "#/components/schemas/Link" }
                   items:
                     type: array
                     items: { $ref: "#/components/schemas/Trip" }
               example:
-                pagination: { total: 25, page: 1, pageSize: 10, totalPages: 3 }
+                pagination: { limit: 10, hasMore: true }
+                _links:
+                  self: { href: "/cars/WBA1234567890/trips?limit=10" }
+                  next:
+                    {
+                      href: "/cars/WBA1234567890/trips?cursor=eyJ0cmlwSWQiOiJiMWYyZTNkNCJ9&limit=10",
+                    }
                 items:
                   - tripId: "b1f2e3d4-c5b6-4a3b-9e8d-7c6b5a4b3c2d"
-                    startDate: "2026-02-26T08:00:00Z"
-                    endDate: "2026-02-26T09:30:00Z"
+                    startDate: "2026-03-13T08:00:00Z"
+                    endDate: "2026-03-13T09:30:00Z"
                     startOdometer: 15400
                     endOdometer: 15550
                     status: "final"
                     usageType: "company"
-                    startLocation: { name: "Headquarters" }
-                    endLocation: { name: "Client Site B" }
-        "400":
-          description: Invalid query parameters.
-          content: { application/json: { schema: { $ref: "#/components/schemas/Problem" } } }
-        "404":
-          description: Car not found.
-          content: { application/json: { schema: { $ref: "#/components/schemas/Problem" } } }
+                    startLocation:
+                      {
+                        href: "/locations/550e8400-e29b-41d4-a716-446655440000",
+                      }
+                    endLocation:
+                      {
+                        href: "/locations/661f9511-f30c-52e5-b827-557766551111",
+                      }
+                    _links:
+                      self:
+                        {
+                          href: "/cars/WBA1234567890/trips/b1f2e3d4-c5b6-4a3b-9e8d-7c6b5a4b3c2d",
+                        }
+                      car: { href: "/cars/WBA1234567890" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
 
     post:
       tags: [Trip Management]
@@ -524,10 +1102,8 @@ paths:
         Records a completed or ongoing trip. This side-effectually updates the vehicle's `currentOdometer`.
         **AI Instruction:** The `startOdometer` MUST match the car's `currentOdometer` exactly. Fetch `getCarDetails` first to ensure continuity.
       parameters:
-        - name: vin
-          in: path
-          required: true
-          schema: { type: string }
+        - $ref: "#/components/parameters/Vin"
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -537,49 +1113,484 @@ paths:
         "201":
           description: Trip logged successfully.
           headers:
-            X-Clacks-Overhead: { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Clacks-Overhead:
+              { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Request-ID: { $ref: "#/components/headers/X-Request-ID" }
+            X-RateLimit-Limit:
+              { $ref: "#/components/headers/X-RateLimit-Limit" }
+            X-RateLimit-Remaining:
+              { $ref: "#/components/headers/X-RateLimit-Remaining" }
+            X-RateLimit-Reset:
+              { $ref: "#/components/headers/X-RateLimit-Reset" }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Trip" }
               example:
                 tripId: "b1f2e3d4-c5b6-4a3b-9e8d-7c6b5a4b3c2d"
-                startDate: "2026-02-26T08:00:00Z"
-                endDate: "2026-02-26T09:30:00Z"
+                startDate: "2026-03-13T08:00:00Z"
+                endDate: "2026-03-13T09:30:00Z"
                 startOdometer: 15400
                 endOdometer: 15550
                 status: "ended"
                 usageType: "company"
-                startLocation: { locationId: "550e8400-e29b-41d4-a716-446655440000", name: "Headquarters" }
-                endLocation: { locationId: "661f9511-f30c-52e5-b827-557766551111", name: "Client Site B" }
-        "400":
-          description: Business logic error (e.g., odometer rollback).
-          content: { application/json: { schema: { $ref: "#/components/schemas/Problem" } } }
-        "404":
-          description: Car not found.
-          content: { application/json: { schema: { $ref: "#/components/schemas/Problem" } } }
+                startLocation:
+                  locationId: "550e8400-e29b-41d4-a716-446655440000"
+                  name: "Headquarters"
+                  _links:
+                    {
+                      self:
+                        {
+                          href: "/locations/550e8400-e29b-41d4-a716-446655440000",
+                        },
+                    }
+                endLocation:
+                  locationId: "661f9511-f30c-52e5-b827-557766551111"
+                  name: "Client Site B"
+                  _links:
+                    {
+                      self:
+                        {
+                          href: "/locations/661f9511-f30c-52e5-b827-557766551111",
+                        },
+                    }
+                _links:
+                  self:
+                    {
+                      href: "/cars/WBA1234567890/trips/b1f2e3d4-c5b6-4a3b-9e8d-7c6b5a4b3c2d",
+                    }
+                  car: { href: "/cars/WBA1234567890" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+
+  /cars/{vin}/trips/{tripId}:
+    get:
+      tags: [Trip Management]
+      operationId: getTripDetails
+      summary: Get trip details
+      description: |
+        Returns full details for a specific trip.
+      parameters:
+        - $ref: "#/components/parameters/Vin"
+        - $ref: "#/components/parameters/TripId"
+      responses:
+        "200":
+          description: Full trip data.
+          headers:
+            X-Clacks-Overhead:
+              { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Request-ID: { $ref: "#/components/headers/X-Request-ID" }
+            X-RateLimit-Limit:
+              { $ref: "#/components/headers/X-RateLimit-Limit" }
+            X-RateLimit-Remaining:
+              { $ref: "#/components/headers/X-RateLimit-Remaining" }
+            X-RateLimit-Reset:
+              { $ref: "#/components/headers/X-RateLimit-Reset" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Trip" }
+              example:
+                tripId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+                startDate: "2026-03-13T08:00:00Z"
+                endDate: "2026-03-13T09:30:00Z"
+                startOdometer: 15300
+                endOdometer: 15400
+                status: "reviewed"
+                usageType: "company"
+                comment: "Client meeting in downtown."
+                startLocation:
+                  locationId: "550e8400-e29b-41d4-a716-446655440000"
+                  name: "Headquarters"
+                  isFavourite: true
+                  _links:
+                    {
+                      self:
+                        {
+                          href: "/locations/550e8400-e29b-41d4-a716-446655440000",
+                        },
+                    }
+                endLocation:
+                  locationId: "661f9511-f30c-52e5-b827-557766551111"
+                  name: "Client Site B"
+                  isFavourite: false
+                  _links:
+                    {
+                      self:
+                        {
+                          href: "/locations/661f9511-f30c-52e5-b827-557766551111",
+                        },
+                    }
+                _links:
+                  self:
+                    {
+                      href: "/cars/WBA1234567890/trips/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+                    }
+                  car: { href: "/cars/WBA1234567890" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+
+    patch:
+      tags: [Trip Management]
+      operationId: updateTrip
+      summary: Update a trip
+      description: |
+        Update trip details or advance its lifecycle status. Use this to transition a trip through `draft` → `started` → `ended` → `reviewed` → `final`.
+        **AI Instruction:** Once a trip is `final`, it cannot be modified. Verify the current status with `getTripDetails` before attempting an update.
+      parameters:
+        - $ref: "#/components/parameters/Vin"
+        - $ref: "#/components/parameters/TripId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TripUpdate" }
+      responses:
+        "200":
+          description: Trip updated successfully. Returns the full updated trip object.
+          headers:
+            X-Clacks-Overhead:
+              { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Request-ID: { $ref: "#/components/headers/X-Request-ID" }
+            X-RateLimit-Limit:
+              { $ref: "#/components/headers/X-RateLimit-Limit" }
+            X-RateLimit-Remaining:
+              { $ref: "#/components/headers/X-RateLimit-Remaining" }
+            X-RateLimit-Reset:
+              { $ref: "#/components/headers/X-RateLimit-Reset" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Trip" }
+              example:
+                tripId: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+                startDate: "2026-03-13T08:00:00Z"
+                endDate: "2026-03-13T09:30:00Z"
+                startOdometer: 15300
+                endOdometer: 15400
+                status: "final"
+                usageType: "company"
+                comment: "Client meeting in downtown."
+                startLocation:
+                  { href: "/locations/550e8400-e29b-41d4-a716-446655440000" }
+                endLocation:
+                  { href: "/locations/661f9511-f30c-52e5-b827-557766551111" }
+                _links:
+                  self:
+                    {
+                      href: "/cars/WBA1234567890/trips/a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11",
+                    }
+                  car: { href: "/cars/WBA1234567890" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+
+  # --- Comment Management ---
+  /cars/{vin}/comments:
+    get:
+      tags: [Comment Management]
+      operationId: listCarComments
+      summary: List comments for a car
+      description: |
+        Returns a paginated list of comments attached to the specified car.
+      parameters:
+        - $ref: "#/components/parameters/Vin"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Paginated comment list.
+          headers:
+            X-Clacks-Overhead:
+              { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Request-ID: { $ref: "#/components/headers/X-Request-ID" }
+            X-RateLimit-Limit:
+              { $ref: "#/components/headers/X-RateLimit-Limit" }
+            X-RateLimit-Remaining:
+              { $ref: "#/components/headers/X-RateLimit-Remaining" }
+            X-RateLimit-Reset:
+              { $ref: "#/components/headers/X-RateLimit-Reset" }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pagination: { $ref: "#/components/schemas/Pagination" }
+                  _links:
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      self: { $ref: "#/components/schemas/Link" }
+                      next: { $ref: "#/components/schemas/Link" }
+                      prev: { $ref: "#/components/schemas/Link" }
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Comment" }
+              example:
+                pagination: { limit: 10, hasMore: false }
+                _links:
+                  self: { href: "/cars/WBA1234567890/comments?limit=10" }
+                items:
+                  - commentId: "d4e5f6a7-b8c9-40d1-e2f3-a4b5c6d7e8f9"
+                    dateCreated: "2026-03-13T14:00:00Z"
+                    text: "Annual service completed."
+                    _links:
+                      {
+                        self:
+                          {
+                            href: "/cars/WBA1234567890/comments/d4e5f6a7-b8c9-40d1-e2f3-a4b5c6d7e8f9",
+                          },
+                      }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+
+    post:
+      tags: [Comment Management]
+      operationId: addCarComment
+      summary: Add a comment to a car
+      description: |
+        Attach a new comment to the specified car.
+        **AI Instruction:** Use this to record maintenance notes, inspection reminders, or other observations about a vehicle.
+      parameters:
+        - $ref: "#/components/parameters/Vin"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CommentCreate" }
+      responses:
+        "201":
+          description: Comment created.
+          headers:
+            X-Clacks-Overhead:
+              { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Request-ID: { $ref: "#/components/headers/X-Request-ID" }
+            X-RateLimit-Limit:
+              { $ref: "#/components/headers/X-RateLimit-Limit" }
+            X-RateLimit-Remaining:
+              { $ref: "#/components/headers/X-RateLimit-Remaining" }
+            X-RateLimit-Reset:
+              { $ref: "#/components/headers/X-RateLimit-Reset" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Comment" }
+              example:
+                commentId: "e5f6a7b8-c9d0-41e2-f3a4-b5c6d7e8f9a0"
+                dateCreated: "2026-03-01T09:00:00Z"
+                text: "Winter tires need to be changed next season."
+                _links:
+                  {
+                    self:
+                      {
+                        href: "/cars/WBA1234567890/comments/e5f6a7b8-c9d0-41e2-f3a4-b5c6d7e8f9a0",
+                      },
+                  }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+
+  /cars/{vin}/comments/{commentId}:
+    get:
+      tags: [Comment Management]
+      operationId: getCarComment
+      summary: Get a specific comment
+      description: |
+        Returns the full details of a single comment, including its edit history.
+      parameters:
+        - $ref: "#/components/parameters/Vin"
+        - $ref: "#/components/parameters/CommentId"
+      responses:
+        "200":
+          description: Full comment data.
+          headers:
+            X-Clacks-Overhead:
+              { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Request-ID: { $ref: "#/components/headers/X-Request-ID" }
+            X-RateLimit-Limit:
+              { $ref: "#/components/headers/X-RateLimit-Limit" }
+            X-RateLimit-Remaining:
+              { $ref: "#/components/headers/X-RateLimit-Remaining" }
+            X-RateLimit-Reset:
+              { $ref: "#/components/headers/X-RateLimit-Reset" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Comment" }
+              example:
+                commentId: "d4e5f6a7-b8c9-40d1-e2f3-a4b5c6d7e8f9"
+                dateCreated: "2026-03-13T14:00:00Z"
+                text: "Annual service completed."
+                dateChanged: "2026-03-13T15:00:00Z"
+                editHistory:
+                  - editor: "service-bot-01"
+                    timestamp: "2026-03-13T15:00:00Z"
+                _links:
+                  {
+                    self:
+                      {
+                        href: "/cars/WBA1234567890/comments/d4e5f6a7-b8c9-40d1-e2f3-a4b5c6d7e8f9",
+                      },
+                  }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+
+    patch:
+      tags: [Comment Management]
+      operationId: updateCarComment
+      summary: Update a comment
+      description: |
+        Update the text of an existing comment. The edit is recorded in the comment's `editHistory`.
+      parameters:
+        - $ref: "#/components/parameters/Vin"
+        - $ref: "#/components/parameters/CommentId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CommentUpdate" }
+      responses:
+        "200":
+          description: Comment updated successfully.
+          headers:
+            X-Clacks-Overhead:
+              { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Request-ID: { $ref: "#/components/headers/X-Request-ID" }
+            X-RateLimit-Limit:
+              { $ref: "#/components/headers/X-RateLimit-Limit" }
+            X-RateLimit-Remaining:
+              { $ref: "#/components/headers/X-RateLimit-Remaining" }
+            X-RateLimit-Reset:
+              { $ref: "#/components/headers/X-RateLimit-Reset" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Comment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+
+    delete:
+      tags: [Comment Management]
+      operationId: deleteCarComment
+      summary: Delete a comment
+      description: |
+        Permanently removes a comment from the specified car.
+      parameters:
+        - $ref: "#/components/parameters/Vin"
+        - $ref: "#/components/parameters/CommentId"
+      responses:
+        "204":
+          description: Comment deleted successfully.
+          headers:
+            X-Clacks-Overhead:
+              { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Request-ID: { $ref: "#/components/headers/X-Request-ID" }
+            X-RateLimit-Limit:
+              { $ref: "#/components/headers/X-RateLimit-Limit" }
+            X-RateLimit-Remaining:
+              { $ref: "#/components/headers/X-RateLimit-Remaining" }
+            X-RateLimit-Reset:
+              { $ref: "#/components/headers/X-RateLimit-Reset" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
 
   # --- Location Management ---
   /locations:
     get:
       tags: [Location Management]
-      operationId: listFavouriteLocations
-      summary: List bookmarked locations
+      operationId: listLocations
+      summary: List saved locations
       description: |
-        Returns a list of saved locations.
+        Returns a paginated list of saved locations.
         **AI Instruction:** Search this list before creating a new location to avoid duplicates.
+      parameters:
+        - name: isFavourite
+          in: query
+          schema: { type: boolean }
+          description: "Filter by favourite status."
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
       responses:
         "200":
-          description: List of saved locations.
+          description: Paginated list of saved locations.
+          headers:
+            X-Clacks-Overhead:
+              { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Request-ID: { $ref: "#/components/headers/X-Request-ID" }
+            X-RateLimit-Limit:
+              { $ref: "#/components/headers/X-RateLimit-Limit" }
+            X-RateLimit-Remaining:
+              { $ref: "#/components/headers/X-RateLimit-Remaining" }
+            X-RateLimit-Reset:
+              { $ref: "#/components/headers/X-RateLimit-Reset" }
           content:
             application/json:
               schema:
-                type: array
-                items: { $ref: "#/components/schemas/Location" }
+                type: object
+                properties:
+                  pagination: { $ref: "#/components/schemas/Pagination" }
+                  _links:
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      self: { $ref: "#/components/schemas/Link" }
+                      next: { $ref: "#/components/schemas/Link" }
+                      prev: { $ref: "#/components/schemas/Link" }
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Location" }
               example:
-                - locationId: "550e8400-e29b-41d4-a716-446655440000"
-                  name: "Headquarters"
-                  isFavourite: true
-                  address: { street: "Rotenturmstraße 1", city: "Vienna", country: "AT" }
+                pagination: { limit: 10, hasMore: false }
+                _links:
+                  self: { href: "/locations?limit=10" }
+                items:
+                  - locationId: "550e8400-e29b-41d4-a716-446655440000"
+                    name: "Headquarters"
+                    isFavourite: true
+                    address:
+                      {
+                        street: "Rotenturmstraße 1",
+                        city: "Vienna",
+                        country: "AT",
+                      }
+                    _links:
+                      {
+                        self:
+                          {
+                            href: "/locations/550e8400-e29b-41d4-a716-446655440000",
+                          },
+                      }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+
     post:
       tags: [Location Management]
       operationId: saveLocation
@@ -587,6 +1598,8 @@ paths:
       description: |
         Saves a new location for easier reference in trip logs.
         **AI Instruction:** Proactively save locations that the user visits frequently.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -596,7 +1609,15 @@ paths:
         "201":
           description: Location saved.
           headers:
-            X-Clacks-Overhead: { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Clacks-Overhead:
+              { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Request-ID: { $ref: "#/components/headers/X-Request-ID" }
+            X-RateLimit-Limit:
+              { $ref: "#/components/headers/X-RateLimit-Limit" }
+            X-RateLimit-Remaining:
+              { $ref: "#/components/headers/X-RateLimit-Remaining" }
+            X-RateLimit-Reset:
+              { $ref: "#/components/headers/X-RateLimit-Reset" }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Location" }
@@ -605,6 +1626,130 @@ paths:
                 name: "Client Office A"
                 isFavourite: false
                 gps: { latitude: 48.2082, longitude: 16.3738 }
-        "400":
-          description: Invalid location data.
-          content: { application/json: { schema: { $ref: "#/components/schemas/Problem" } } }
+                _links:
+                  {
+                    self:
+                      {
+                        href: "/locations/a1b2c3d4-e5f6-47a8-b9c0-d1e2f3a4b5c6",
+                      },
+                  }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+
+  /locations/{locationId}:
+    get:
+      tags: [Location Management]
+      operationId: getLocationDetails
+      summary: Get location details
+      description: |
+        Returns full details for a specific saved location.
+      parameters:
+        - $ref: "#/components/parameters/LocationId"
+      responses:
+        "200":
+          description: Full location data.
+          headers:
+            X-Clacks-Overhead:
+              { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Request-ID: { $ref: "#/components/headers/X-Request-ID" }
+            X-RateLimit-Limit:
+              { $ref: "#/components/headers/X-RateLimit-Limit" }
+            X-RateLimit-Remaining:
+              { $ref: "#/components/headers/X-RateLimit-Remaining" }
+            X-RateLimit-Reset:
+              { $ref: "#/components/headers/X-RateLimit-Reset" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Location" }
+              example:
+                locationId: "550e8400-e29b-41d4-a716-446655440000"
+                name: "Headquarters"
+                isFavourite: true
+                gps: { latitude: 48.2082, longitude: 16.3738 }
+                address:
+                  {
+                    street: "Rotenturmstraße 1",
+                    city: "Vienna",
+                    postalCode: "1010",
+                    country: "AT",
+                  }
+                _links:
+                  {
+                    self:
+                      {
+                        href: "/locations/550e8400-e29b-41d4-a716-446655440000",
+                      },
+                  }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+
+    patch:
+      tags: [Location Management]
+      operationId: updateLocation
+      summary: Update a location
+      description: |
+        Partially update a saved location's details.
+      parameters:
+        - $ref: "#/components/parameters/LocationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LocationUpdate" }
+      responses:
+        "200":
+          description: Location updated successfully. Returns the full updated location.
+          headers:
+            X-Clacks-Overhead:
+              { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Request-ID: { $ref: "#/components/headers/X-Request-ID" }
+            X-RateLimit-Limit:
+              { $ref: "#/components/headers/X-RateLimit-Limit" }
+            X-RateLimit-Remaining:
+              { $ref: "#/components/headers/X-RateLimit-Remaining" }
+            X-RateLimit-Reset:
+              { $ref: "#/components/headers/X-RateLimit-Reset" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Location" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalServerError" }
+
+    delete:
+      tags: [Location Management]
+      operationId: deleteLocation
+      summary: Delete a location
+      description: |
+        Permanently removes a saved location. Trips that referenced this location retain their historical data.
+      parameters:
+        - $ref: "#/components/parameters/LocationId"
+      responses:
+        "204":
+          description: Location deleted successfully.
+          headers:
+            X-Clacks-Overhead:
+              { $ref: "#/components/headers/X-Clacks-Overhead" }
+            X-Request-ID: { $ref: "#/components/headers/X-Request-ID" }
+            X-RateLimit-Limit:
+              { $ref: "#/components/headers/X-RateLimit-Limit" }
+            X-RateLimit-Remaining:
+              { $ref: "#/components/headers/X-RateLimit-Remaining" }
+            X-RateLimit-Reset:
+              { $ref: "#/components/headers/X-RateLimit-Reset" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "500": { $ref: "#/components/responses/InternalServerError" }

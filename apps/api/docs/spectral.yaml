@@ -1,0 +1,417 @@
+extends:
+  - ["spectral:oas", "recommended"]
+
+rules:
+
+  # Disable built-in OAS 3.0 schema validator — our spec uses OAS 3.1 features
+  # (e.g. `examples` keyword, `type: ["string", "null"]`) that trigger false positives
+  oas3-schema: off
+
+  # ============================================================
+  # SECTION 1: OpenAPI FUNDAMENTALS
+  # ============================================================
+
+  # info.contact must be present
+  logger3000-info-contact:
+    message: "info.contact is required. Include at minimum name and email."
+    severity: error
+    given: "$.info"
+    then:
+      field: contact
+      function: truthy
+
+  # info.contact must have an email address
+  logger3000-info-contact-email:
+    message: "info.contact.email is required."
+    severity: error
+    given: "$.info.contact"
+    then:
+      field: email
+      function: truthy
+
+  # All operations must have an operationId
+  logger3000-operation-id-required:
+    message: "Every operation must have an operationId. Used for code generation and AI agent tool naming."
+    severity: error
+    given: "$.paths[*][get,post,put,patch,delete,options,head]"
+    then:
+      field: operationId
+      function: truthy
+
+  # operationId must be camelCase
+  logger3000-operation-id-camel-case:
+    message: "operationId '{{value}}' must be camelCase."
+    severity: warn
+    given: "$.paths[*][get,post,put,patch,delete].operationId"
+    then:
+      function: pattern
+      functionOptions:
+        match: "^[a-z][a-zA-Z0-9]*$"
+
+  # All operations must have a summary
+  logger3000-operation-summary-required:
+    message: "Every operation must have a summary."
+    severity: error
+    given: "$.paths[*][get,post,put,patch,delete,options,head]"
+    then:
+      field: summary
+      function: truthy
+
+  # All operations must have a description
+  logger3000-operation-description-required:
+    message: "Every operation must have a description. Use this to document behaviour, side effects, and AI Instructions."
+    severity: error
+    given: "$.paths[*][get,post,put,patch,delete,options,head]"
+    then:
+      field: description
+      function: truthy
+
+  # All operations must declare at least one tag
+  logger3000-operation-tags-required:
+    message: "Every operation must have at least one tag for grouping in documentation and agent tool discovery."
+    severity: error
+    given: "$.paths[*][get,post,put,patch,delete]"
+    then:
+      field: tags
+      function: truthy
+
+  # Tags used on operations must be declared at the top level
+  logger3000-tags-defined:
+    message: "All tags used on operations should be declared in the top-level tags array with descriptions."
+    severity: warn
+    given: "$.tags[*]"
+    then:
+      field: description
+      function: truthy
+
+  # ============================================================
+  # SECTION 2: PARAMETER DOCUMENTATION
+  # ============================================================
+
+  # All path parameters must have a description
+  logger3000-path-param-description:
+    message: "Path parameter '{{path}}' must have a description."
+    severity: error
+    given: "$.paths[*][*].parameters[?(@.in == 'path')]"
+    then:
+      field: description
+      function: truthy
+
+  # All query parameters must have a description
+  logger3000-query-param-description:
+    message: "Query parameter '{{path}}' must have a description."
+    severity: error
+    given: "$.paths[*][*].parameters[?(@.in == 'query')]"
+    then:
+      field: description
+      function: truthy
+
+  # All parameters must have a schema
+  logger3000-param-schema-required:
+    message: "Parameter '{{path}}' must define a schema."
+    severity: error
+    given: "$.paths[*][*].parameters[*]"
+    then:
+      field: schema
+      function: truthy
+
+  # Enum parameters must have descriptions (for AI agent clarity)
+  logger3000-enum-param-description:
+    message: "Enum parameter must have a description explaining each value."
+    severity: warn
+    given: "$.paths[*][*].parameters[?(@.schema.enum)]"
+    then:
+      field: description
+      function: truthy
+
+  # ============================================================
+  # SECTION 3: SCHEMA DOCUMENTATION QUALITY
+  # ============================================================
+
+  # Top-level reusable schemas must have a description
+  logger3000-schema-description:
+    message: "Schema '{{path}}' must have a description."
+    severity: warn
+    given: "$.components.schemas[*]"
+    then:
+      field: description
+      function: truthy
+
+  # Enum values in schemas must be documented
+  logger3000-schema-enum-description:
+    message: "Schema property with enum values must have a description explaining each value."
+    severity: warn
+    given: "$.components.schemas[*].properties[?(@.enum)]"
+    then:
+      field: description
+      function: truthy
+
+  # String properties should define maxLength to prevent oversized payloads
+  # Excludes Link and ResourceRef schemas whose href is a URI reference without a fixed bound
+  logger3000-string-maxlength:
+    message: "String property '{{path}}' should define a maxLength constraint."
+    severity: warn
+    given: "$.components.schemas[?(@property != 'Link' && @property != 'ResourceRef')].properties[?(@.type == 'string')]"
+    then:
+      field: maxLength
+      function: truthy
+
+  # Integer properties that represent measurements should have a description with units
+  logger3000-integer-description:
+    message: "Integer property '{{path}}' should have a description (include units where applicable, e.g. km, ms)."
+    severity: warn
+    given: "$.components.schemas[*].properties[?(@.type == 'integer')]"
+    then:
+      field: description
+      function: truthy
+
+  # ============================================================
+  # SECTION 4: ERROR RESPONSE COVERAGE
+  # ============================================================
+
+  # All operations must document a 400 response
+  logger3000-response-400:
+    message: "Operation must document a 400 Bad Request response."
+    severity: error
+    given: "$.paths[*][get,post,put,patch,delete]"
+    then:
+      field: "responses.400"
+      function: truthy
+
+  # All operations must document a 401 response
+  logger3000-response-401:
+    message: "Operation must document a 401 Unauthorized response."
+    severity: error
+    given: "$.paths[*][get,post,put,patch,delete]"
+    then:
+      field: "responses.401"
+      function: truthy
+
+  # All operations must document a 403 response
+  logger3000-response-403:
+    message: "Operation must document a 403 Forbidden response. Required for scope-based access control."
+    severity: error
+    given: "$.paths[*][get,post,put,patch,delete]"
+    then:
+      field: "responses.403"
+      function: truthy
+
+  # All operations must document a 429 response (rate limiting - API-V2-06)
+  logger3000-response-429:
+    message: "Operation must document a 429 Too Many Requests response. Required per API-V2-06 rate limiting PBI."
+    severity: error
+    given: "$.paths[*][get,post,put,patch,delete]"
+    then:
+      field: "responses.429"
+      function: truthy
+
+  # All operations must document a 500 response
+  logger3000-response-500:
+    message: "Operation must document a 500 Internal Server Error response."
+    severity: warn
+    given: "$.paths[*][get,post,put,patch,delete]"
+    then:
+      field: "responses.500"
+      function: truthy
+
+  # Operations with path parameters should document 404
+  logger3000-response-404-on-path-params:
+    message: "Operation with path parameters must document a 404 Not Found response."
+    severity: error
+    given: "$.paths[*~(.*\\{.*\\}.*)][get,post,put,patch,delete]"
+    then:
+      field: "responses.404"
+      function: truthy
+
+  # Error responses must use the shared Problem schema (RFC 9457)
+  logger3000-error-uses-problem-schema:
+    message: "Error response must reference the shared Problem schema (#/components/schemas/Problem) with media type application/problem+json."
+    severity: error
+    given: "$.paths[*][*].responses[400,401,403,404,409,429,500].content.application/problem+json.schema"
+    then:
+      function: schema
+      functionOptions:
+        schema:
+          properties:
+            $ref:
+              type: string
+              pattern: "^#/components/schemas/Problem$"
+
+  # ============================================================
+  # SECTION 5: RATE LIMITING HEADERS (API-V2-06)
+  # ============================================================
+
+  # Successful responses should include rate limit headers
+  logger3000-ratelimit-headers-present:
+    message: "Successful responses should document X-RateLimit-Limit, X-RateLimit-Remaining, and X-RateLimit-Reset headers per API-V2-06."
+    severity: warn
+    given: "$.paths[*][get,post,put,patch,delete].responses[200,201]"
+    then:
+      field: headers
+      function: truthy
+
+  # ============================================================
+  # SECTION 6: REQUEST TRACEABILITY (API-V2-07)
+  # ============================================================
+
+  # Successful responses should return X-Request-ID header
+  logger3000-request-id-response-header:
+    message: "Successful responses must return an X-Request-ID header for audit correlation per API-V2-07."
+    severity: error
+    given: "$.paths[*][get,post,put,patch,delete].responses[200,201].headers"
+    then:
+      field: X-Request-ID
+      function: truthy
+
+  # ============================================================
+  # SECTION 7: IDEMPOTENCY (API-V2-05 extension)
+  # ============================================================
+
+  # POST operations must document Idempotency-Key header support
+  logger3000-idempotency-key-post:
+    message: "POST operations must document an Idempotency-Key request header to support safe agent retries per API-V2-05."
+    severity: error
+    given: "$.paths[*].post"
+    then:
+      field: parameters
+      function: schema
+      functionOptions:
+        schema:
+          type: array
+          contains:
+            type: object
+            properties:
+              name:
+                type: string
+                const: Idempotency-Key
+              in:
+                type: string
+                const: header
+
+  # ============================================================
+  # SECTION 8: PAGINATION STANDARDS
+  # ============================================================
+
+  # All GET endpoints that return bare arrays must be wrapped in a paginated envelope
+  logger3000-get-array-response-has-pagination:
+    message: "GET operations returning collections must not use bare arrays. Wrap items in an object with cursor-based pagination ('cursor' and 'limit' query parameters)."
+    severity: error
+    given: "$.paths[*].get.responses.200.content.application/json.schema[?(@.type == 'array')]"
+    then:
+      function: truthy
+
+  # GET collection endpoints should include Pagination metadata in response
+  logger3000-collection-response-has-pagination-meta:
+    message: "Collection responses should wrap items in an object with a 'pagination' property referencing the Pagination schema."
+    severity: warn
+    given: "$.paths[*].get.responses.200.content['application/json'].schema.properties"
+    then:
+      field: pagination
+      function: truthy
+
+  # Collection responses must include _links for cursor navigation
+  logger3000-collection-response-has-links:
+    message: "Collection responses must include a '_links' property with self, next, and prev links for cursor-based navigation."
+    severity: warn
+    given: "$.paths[*].get.responses.200.content['application/json'].schema.properties"
+    then:
+      field: _links
+      function: truthy
+
+  # ============================================================
+  # SECTION 9: REQUEST/RESPONSE BODY STANDARDS
+  # ============================================================
+
+  # POST and PUT/PATCH must define a requestBody
+  logger3000-mutating-has-request-body:
+    message: "POST, PUT, and PATCH operations must define a requestBody."
+    severity: error
+    given: "$.paths[*][post,put,patch]"
+    then:
+      field: requestBody
+      function: truthy
+
+  # requestBody must be marked required for mutating operations
+  logger3000-request-body-required-flag:
+    message: "requestBody should be marked as required: true on mutating operations."
+    severity: warn
+    given: "$.paths[*][post,put,patch].requestBody"
+    then:
+      field: required
+      function: truthy
+
+  # Successful responses must define a content body (except 204)
+  logger3000-success-response-has-content:
+    message: "Successful (200/201) responses must define a response body schema."
+    severity: error
+    given: "$.paths[*][get,post,put,patch].responses[200,201]"
+    then:
+      field: content
+      function: truthy
+
+  # Response content must be application/json
+  logger3000-response-content-type-json:
+    message: "Responses must include an application/json content type."
+    severity: error
+    given: "$.paths[*][get,post,put,patch].responses[200,201].content"
+    then:
+      field: "application/json"
+      function: truthy
+
+  # ============================================================
+  # SECTION 10: HATEOAS / _links STANDARDS
+  # ============================================================
+
+  # All resource schemas must include a _links property with self
+  logger3000-resource-has-links:
+    message: "Resource schemas should include a '_links' property with at least a 'self' link for discoverability."
+    severity: warn
+    given: "$.components.schemas[?(@.required && @.properties._links)]"
+    then:
+      field: "properties._links.properties.self"
+      function: truthy
+
+  # ============================================================
+  # SECTION 11: AI AGENT READINESS
+  # ============================================================
+
+  # State-mutating operations should document side effects
+  logger3000-post-side-effects-documented:
+    message: "POST operations should document any side effects (e.g., cascading updates) in their description."
+    severity: warn
+    given: "$.paths[*].post"
+    then:
+      field: description
+      function: truthy
+
+  # Operations must not use GET with a request body (invalid for agents and tooling)
+  logger3000-no-get-with-body:
+    message: "GET operations must not define a requestBody. Use query parameters instead."
+    severity: error
+    given: "$.paths[*].get"
+    then:
+      field: requestBody
+      function: falsy
+
+  # ============================================================
+  # SECTION 12: SERVERS BLOCK
+  # ============================================================
+
+  # At least one server must be defined
+  logger3000-servers-defined:
+    message: "At least one server must be defined in the servers block."
+    severity: error
+    given: "$"
+    then:
+      field: servers
+      function: truthy
+
+  # Server URLs must use HTTPS
+  logger3000-server-https:
+    message: "All server URLs must use HTTPS."
+    severity: error
+    given: "$.servers[*].url"
+    then:
+      function: pattern
+      functionOptions:
+        match: "^https://"
