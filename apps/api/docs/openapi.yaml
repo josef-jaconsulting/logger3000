@@ -587,11 +587,8 @@ components:
         [
           tripId,
           startDate,
-          endDate,
           startOdometer,
-          endOdometer,
           startLocation,
-          endLocation,
           usageType,
           status,
           _links,
@@ -613,13 +610,16 @@ components:
           }
         endDate:
           {
-            type: string,
+            type: ["string", "null"],
             format: date-time,
             maxLength: 30,
             examples: ["2026-03-13T09:30:00Z"],
           }
         startOdometer: { $ref: "#/components/schemas/Odometer" }
-        endOdometer: { $ref: "#/components/schemas/Odometer" }
+        endOdometer:
+          oneOf:
+            - $ref: "#/components/schemas/Odometer"
+            - type: "null"
         startLocation:
           oneOf:
             - $ref: "#/components/schemas/Location"
@@ -628,6 +628,7 @@ components:
           oneOf:
             - $ref: "#/components/schemas/Location"
             - $ref: "#/components/schemas/ResourceRef"
+            - type: "null"
         comment:
           {
             type: string,
@@ -666,11 +667,8 @@ components:
       required:
         [
           startDate,
-          endDate,
           startOdometer,
-          endOdometer,
           startLocation,
-          endLocation,
           usageType,
         ]
       properties:
@@ -713,6 +711,12 @@ components:
             enum: [private, company],
             description: "Whether this trip was for private or company use.",
           }
+        status:
+          type: string
+          maxLength: 10
+          enum: [draft, started, ended]
+          default: started
+          description: "Initial lifecycle status. Use 'started' or 'draft' for partial trips."
 
     TripUpdate:
       type: object
