@@ -6,10 +6,10 @@ across agents. It complements, not replaces, what you already have:
 
 | File / Folder          | Answers                          | Scope              | Update frequency |
 |-------------------------|-----------------------------------|---------------------|-------------------|
-| `AGENTS.md` (existing)  | "How should any agent behave here?" | Static rules        | Rarely |
-| `AI.md` (existing)      | "What's the task right now?"      | Current sprint/task | Every task |
+| `AGENTS.md`             | "How should any agent behave here?" | Static rules        | Rarely |
+| `AI.md`                 | "What's the task right now?"      | Current sprint/task | Every task |
 | `context/SOUL.md`       | "Who is this agent, in character/tone terms?" | Agent identity | Rarely |
-| `operator.md`| "Who is the human, and how do they like to work?" | Per-human | Occasionally |
+| `operator.md`           | "Who is the human, and how do they like to work?" | Per-human | Occasionally |
 | `context/MEMORY.md`     | Index — where to find everything below | Pointer file | When structure changes |
 | `context/memory/activeContext.md` | "What's being worked on, and what should the next session know first?" | Rolling | Every session |
 | `context/memory/progress.md` | "What milestones are done / in progress / blocked?" | Project-wide | Weekly / per milestone |
